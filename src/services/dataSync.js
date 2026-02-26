@@ -530,6 +530,29 @@ class DataSyncService {
   }
 
   /**
+   * Normalize SB (or any v3) report response so we always get an array of row objects.
+   * Handles: raw array of objects, wrapped { data/records/results }, or array-of-arrays (header row + data rows).
+   */
+  normalizeReportRows(raw) {
+    if (raw == null) return [];
+    let rows = raw;
+    if (!Array.isArray(raw) && typeof raw === 'object') {
+      rows = raw.data ?? raw.records ?? raw.results ?? raw.body ?? raw.rows ?? [];
+    }
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const first = rows[0];
+    if (Array.isArray(first) && first.length > 0 && typeof first[0] === 'string') {
+      const headers = first.map(h => (h && typeof h === 'string' ? h : String(h)));
+      return rows.slice(1).map(row => {
+        const obj = {};
+        headers.forEach((key, i) => { obj[key] = row[i]; });
+        return obj;
+      });
+    }
+    return rows;
+  }
+
+  /**
    * Sync Sponsored Brands (SB) campaign performance into campaign_performance.
    *
    * SB uses DIFFERENT column names from SP in the v3 Reporting API:
@@ -569,7 +592,7 @@ class DataSyncService {
       let reportData = [];
       try {
         const raw = await this.client.getSBCampaignPerformanceData(reportDate);
-        reportData = Array.isArray(raw) ? raw : [];
+        reportData = this.normalizeReportRows(raw);
         logger.info(`📊 [SB CAMPAIGNS] API returned ${reportData.length} records for ${reportDate}`);
       } catch (apiError) {
         logger.warn(`⚠️  [SB CAMPAIGNS] SB campaign performance API error for ${reportDate}: ${apiError.message}`);
@@ -577,7 +600,9 @@ class DataSyncService {
 
       const apiByCampaignId = new Map();
       for (const record of reportData) {
-        const campaignId = record.campaignId != null ? String(record.campaignId) : null;
+        const campaignId = (record.campaignId ?? record.campaign_id) != null
+          ? String(record.campaignId ?? record.campaign_id)
+          : null;
         if (campaignId && allSBCampaignIds.includes(campaignId)) {
           apiByCampaignId.set(campaignId, record);
         }
@@ -587,26 +612,33 @@ class DataSyncService {
       let synced = 0;
       const total = allSBCampaignIds.length;
 
+      const get = (r, ...keys) => {
+        if (r == null) return undefined;
+        for (const k of keys) {
+          const v = r[k];
+          if (v !== undefined && v !== null && v !== '') return v;
+        }
+        return undefined;
+      };
+
       for (const campaignId of allSBCampaignIds) {
         if (synced > 0 && synced % this.config.batchSize === 0) {
           await new Promise(resolve => setTimeout(resolve, this.config.rateLimitDelay));
         }
 
         const r = apiByCampaignId.get(campaignId);
-        const impressions   = r != null ? parseInt(this.parsePerformanceNumber(r.impressions), 10) || 0 : 0;
-        const clicks        = r != null ? parseInt(this.parsePerformanceNumber(r.clicks), 10) || 0 : 0;
-        const cost          = r != null ? this.parsePerformanceNumber(r.cost) : 0;
+        const impressions = r != null ? parseInt(this.parsePerformanceNumber(get(r, 'impressions')), 10) || 0 : 0;
+        const clicks      = r != null ? parseInt(this.parsePerformanceNumber(get(r, 'clicks')), 10) || 0 : 0;
+        const cost        = r != null ? this.parsePerformanceNumber(get(r, 'cost')) : 0;
 
-        // SB fields: purchases / purchasesClicks (click-attributed conversions, 14d window)
-        // Use purchasesClicks for click-attributed (consistent with SP's purchasesNd).
-        // Fall back to purchases (total = click + view) if purchasesClicks is absent.
+        // SB fields: purchasesClicks / purchases (camelCase or snake_case from array-of-arrays)
         const conversions14d = r != null
-          ? parseInt(this.parsePerformanceNumber(r.purchasesClicks ?? r.purchases), 10) || 0
+          ? parseInt(this.parsePerformanceNumber(get(r, 'purchasesClicks', 'purchases_clicks', 'purchases')), 10) || 0
           : 0;
 
-        // SB fields: sales / salesClicks (click-attributed sales, 14d window)
+        // SB fields: salesClicks / sales
         const sales14d = r != null
-          ? this.parsePerformanceNumber(r.salesClicks ?? r.sales)
+          ? this.parsePerformanceNumber(get(r, 'salesClicks', 'sales_clicks', 'sales'))
           : 0;
 
         // SB only supports 14-day attribution. Populate 7d columns with the same value
