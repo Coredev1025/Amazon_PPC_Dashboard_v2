@@ -121,6 +121,7 @@ export default function HierarchicalCampaignManager() {
   const [selectedAdGroup, setSelectedAdGroup] = useState<{ id: number; name: string } | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [portfolioFilter, setPortfolioFilter] = useState<number | undefined>(undefined);
+  const [campaignTypeFilter, setCampaignTypeFilter] = useState<string>('all');
   const [selectedRows, setSelectedRows] = useState<Set<string | number>>(new Set());
   const [inventoryStatuses, setInventoryStatuses] = useState<Record<string, any>>({});
   const [showPortfolioModal, setShowPortfolioModal] = useState(false);
@@ -233,6 +234,7 @@ export default function HierarchicalCampaignManager() {
       'campaigns',
       days,
       portfolioFilter,
+      campaignTypeFilter,
       campaignPage,
       campaignPageSize,
       urlCampaignId,
@@ -249,7 +251,8 @@ export default function HierarchicalCampaignManager() {
         urlCampaignId ?? undefined,
         dateRange.startDate,
         dateRange.endDate,
-        statusFilter
+        statusFilter,
+        campaignTypeFilter
       ),
     enabled: activeTab === 'campaigns' || activeTab === 'ad_groups' || activeTab === 'ads' || activeTab === 'keywords' || activeTab === 'targeting' || activeTab === 'search_terms' || activeTab === 'placements',
   });
@@ -482,7 +485,7 @@ export default function HierarchicalCampaignManager() {
         const pageSize = 200;
         let totalPages = 1;
         while (page <= totalPages) {
-          const res = await fetchCampaigns(days, portfolioFilter, page, pageSize, undefined, dateRange.startDate, dateRange.endDate, statusFilter);
+          const res = await fetchCampaigns(days, portfolioFilter, page, pageSize, undefined, dateRange.startDate, dateRange.endDate, statusFilter, campaignTypeFilter);
           allCampaigns.push(...res.data);
           totalPages = res.total_pages;
           page++;
@@ -792,6 +795,16 @@ export default function HierarchicalCampaignManager() {
                     </option>
                   ))}
                 </select>
+                <select
+                  value={campaignTypeFilter}
+                  onChange={(e) => preserveScroll(() => { setCampaignTypeFilter(e.target.value); setCampaignPage(1); setSelectedRows(new Set()); })}
+                  className="select text-sm"
+                >
+                  <option value="all">All Campaigns</option>
+                  <option value="SP">Sponsored Products</option>
+                  <option value="SB">Sponsored Brands</option>
+                  <option value="SD">Sponsored Display</option>
+                </select>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -823,8 +836,8 @@ export default function HierarchicalCampaignManager() {
         </div>
         <SmartGrid
           data={filteredCampaigns}
-statusFilter={statusFilter}
-        onStatusFilterChange={(v) => preserveScroll(() => setStatusFilter(v))}
+          statusFilter={statusFilter}
+          onStatusFilterChange={(v) => preserveScroll(() => setStatusFilter(v))}
         statusFilterOptions={[
             { value: 'all', label: 'All Status' },
             { value: 'enabled', label: 'Enabled' },

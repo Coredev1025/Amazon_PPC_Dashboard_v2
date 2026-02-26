@@ -225,6 +225,7 @@ class DatabaseConnector:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         status: Optional[str] = None,
+        campaign_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get all campaigns with their performance data.
@@ -290,6 +291,9 @@ class DatabaseConnector:
         if portfolio_id is not None:
             query += " AND c.portfolio_id = %s"
             params.append(portfolio_id)
+        if campaign_type is not None and campaign_type.upper() in ('SP', 'SB', 'SD'):
+            query += " AND c.campaign_type = %s"
+            params.append(campaign_type.upper())
         
         query += """
         GROUP BY c.campaign_id, c.campaign_name, c.campaign_status, c.budget_amount, c.budget_type,

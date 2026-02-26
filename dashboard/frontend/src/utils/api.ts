@@ -598,7 +598,8 @@ export const fetchCampaigns = async (
   campaignId?: number,
   startDate?: Date,
   endDate?: Date,
-  status?: string
+  status?: string,
+  campaignType?: string
 ): Promise<PaginatedResponse<Campaign>> => {
   const params = new URLSearchParams({ page: page.toString(), page_size: pageSize.toString() });
   if (startDate && endDate) {
@@ -610,6 +611,9 @@ export const fetchCampaigns = async (
   if (campaignId !== undefined) params.append('campaign_id', campaignId.toString());
   if (portfolioId !== undefined) params.append('portfolio_id', portfolioId.toString());
   if (status && status.toLowerCase() !== 'all') params.append('status', status);
+  if (campaignType && campaignType !== 'all' && ['SP', 'SB', 'SD'].includes(campaignType)) {
+    params.append('campaign_type', campaignType);
+  }
   const response = await api.get(`/api/campaigns?${params.toString()}`);
   return response.data;
 };

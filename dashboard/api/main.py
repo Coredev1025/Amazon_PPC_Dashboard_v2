@@ -1738,11 +1738,12 @@ async def get_campaigns(
     start_date: Optional[str] = Query(None, description="Start date YYYY-MM-DD"),
     end_date: Optional[str] = Query(None, description="End date YYYY-MM-DD"),
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    campaign_type: Optional[str] = Query(None, description="Filter by campaign type: SP (Sponsored Products), SB (Sponsored Brands), SD (Sponsored Display)"),
     status: Optional[str] = Query(None, description="Filter by status: enabled, paused, archived, or omit for all"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=200, description="Items per page"),
 ):
-    """Get campaigns with performance data (paginated). Use either days or start_date+end_date."""
+    """Get campaigns with performance data (paginated). Use either days or start_date+end_date. campaign_type filters by campaigns.campaign_type (SP, SB, SD)."""
     try:
         start_dt = end_dt = None
         if start_date and end_date:
@@ -1755,8 +1756,12 @@ async def get_campaigns(
                 raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
         d = days if days is not None else 7
         status_filter = None if (not status or status.lower() == "all") else status
+        # Filter by campaigns.campaign_type: SP, SB, SD (case-insensitive)
+        campaign_type_filter = (campaign_type or "").strip().upper() if campaign_type else None
+        if campaign_type_filter and campaign_type_filter not in ("SP", "SB", "SD"):
+            campaign_type_filter = None
         campaigns = db_connector.get_campaigns_with_performance(
-            d, portfolio_id, campaign_id, start_date=start_dt, end_date=end_dt, status=status_filter
+            d, portfolio_id, campaign_id, start_date=start_dt, end_date=end_dt, status=status_filter, campaign_type=campaign_type_filter
         )
         
         all_results = []
