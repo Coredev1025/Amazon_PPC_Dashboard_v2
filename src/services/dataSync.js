@@ -453,6 +453,18 @@ class DataSyncService {
           await new Promise(resolve => setTimeout(resolve, this.config.rateLimitDelay));
         }
 
+        const impressions = parseInt(this.parsePerformanceNumber(record.impressions), 10) || 0;
+        const clicks = parseInt(this.parsePerformanceNumber(record.clicks), 10) || 0;
+        const cost = this.parsePerformanceNumber(record.cost);
+        const purchases1d = parseInt(this.parsePerformanceNumber(record.purchases1d), 10) || 0;
+        const purchases7d = parseInt(this.parsePerformanceNumber(record.purchases7d), 10) || 0;
+        const purchases14d = parseInt(this.parsePerformanceNumber(record.purchases14d), 10) || 0;
+        const purchases30d = parseInt(this.parsePerformanceNumber(record.purchases30d), 10) || 0;
+        const sales1d = this.parsePerformanceNumber(record.sales1d);
+        const sales7d = this.parsePerformanceNumber(record.sales7d);
+        const sales14d = this.parsePerformanceNumber(record.sales14d);
+        const sales30d = this.parsePerformanceNumber(record.sales30d);
+
         await db.query(
           `INSERT INTO campaign_performance (
             campaign_id, report_date, impressions, clicks, cost,
@@ -478,21 +490,21 @@ class DataSyncService {
           [
             record.campaignId,
             dbDate,
-            record.impressions || 0,
-            record.clicks || 0,
-            record.cost || 0,
-            record.purchases1d || 0,
-            record.purchases7d || 0,
-            record.purchases14d || 0,
-            record.purchases30d || 0,
-            record.sales1d || 0,
-            record.sales7d || 0,
-            record.sales14d || 0,
-            record.sales30d || 0
+            impressions,
+            clicks,
+            cost,
+            purchases1d,
+            purchases7d,
+            purchases14d,
+            purchases30d,
+            sales1d,
+            sales7d,
+            sales14d,
+            sales30d
           ]
         );
         synced++;
-        
+
         // Log progress every 10 records or at the end
         if (synced % 10 === 0 || synced === total) {
           logger.info(`📊 [CAMPAIGNS] Progress: ${synced}/${total} records saved (${Math.round(synced/total*100)}%)`);
@@ -503,6 +515,150 @@ class DataSyncService {
       return synced;
     } catch (error) {
       logger.error(`❌ [CAMPAIGNS] Error syncing campaign performance:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Parse numeric value for performance fields (avoids "b.00" / string corruption in DB)
+   */
+  parsePerformanceNumber(value) {
+    if (value == null || value === '') return 0;
+    if (typeof value === 'number' && !Number.isNaN(value)) return value;
+    const n = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+    return Number.isNaN(n) ? 0 : n;
+  }
+
+  /**
+   * Sync Sponsored Brands (SB) campaign performance into campaign_performance.
+   *
+   * SB uses DIFFERENT column names from SP in the v3 Reporting API:
+   *   SP: purchases1d, purchases7d, purchases14d, purchases30d, sales1d, sales7d, sales14d, sales30d
+   *   SB: purchases, purchasesClicks, sales, salesClicks  (14-day attribution, NO time suffix)
+   *
+   * We map SB fields → campaign_performance table as follows:
+   *   impressions        → impressions
+   *   clicks             → clicks
+   *   cost               → cost
+   *   purchasesClicks    → attributed_conversions_7d AND attributed_conversions_14d
+   *   salesClicks        → attributed_sales_7d AND attributed_sales_14d
+   *   (1d and 30d set to 0 — SB only supports 14-day attribution)
+   *
+   * The dashboard queries attributed_conversions_7d / attributed_sales_7d for totals,
+   * so we store the SB value there to keep the dashboard working uniformly.
+   *
+   * Reference: https://advertising.amazon.com/API/docs/en-us/guides/reporting/v3/report-types/campaign
+   */
+  async syncSBCampaignPerformance(reportDate) {
+    try {
+      logger.info(`📊 [SB CAMPAIGNS] Syncing Sponsored Brands campaign performance for ${reportDate}...`);
+
+      const dbDate = this.formatDateForDB(reportDate);
+
+      const sbCampaignsResult = await db.query(
+        'SELECT campaign_id FROM campaigns WHERE campaign_type = $1',
+        ['SB']
+      );
+      const allSBCampaignIds = (sbCampaignsResult.rows || []).map(r => String(r.campaign_id));
+      if (allSBCampaignIds.length === 0) {
+        logger.info(`📊 [SB CAMPAIGNS] No SB campaigns in campaigns table for ${reportDate}`);
+        return 0;
+      }
+      logger.info(`📊 [SB CAMPAIGNS] Found ${allSBCampaignIds.length} SB campaigns in DB`);
+
+      let reportData = [];
+      try {
+        const raw = await this.client.getSBCampaignPerformanceData(reportDate);
+        reportData = Array.isArray(raw) ? raw : [];
+        logger.info(`📊 [SB CAMPAIGNS] API returned ${reportData.length} records for ${reportDate}`);
+      } catch (apiError) {
+        logger.warn(`⚠️  [SB CAMPAIGNS] SB campaign performance API error for ${reportDate}: ${apiError.message}`);
+      }
+
+      const apiByCampaignId = new Map();
+      for (const record of reportData) {
+        const campaignId = record.campaignId != null ? String(record.campaignId) : null;
+        if (campaignId && allSBCampaignIds.includes(campaignId)) {
+          apiByCampaignId.set(campaignId, record);
+        }
+      }
+      logger.info(`📊 [SB CAMPAIGNS] Matched ${apiByCampaignId.size} API records to SB campaigns`);
+
+      let synced = 0;
+      const total = allSBCampaignIds.length;
+
+      for (const campaignId of allSBCampaignIds) {
+        if (synced > 0 && synced % this.config.batchSize === 0) {
+          await new Promise(resolve => setTimeout(resolve, this.config.rateLimitDelay));
+        }
+
+        const r = apiByCampaignId.get(campaignId);
+        const impressions   = r != null ? parseInt(this.parsePerformanceNumber(r.impressions), 10) || 0 : 0;
+        const clicks        = r != null ? parseInt(this.parsePerformanceNumber(r.clicks), 10) || 0 : 0;
+        const cost          = r != null ? this.parsePerformanceNumber(r.cost) : 0;
+
+        // SB fields: purchases / purchasesClicks (click-attributed conversions, 14d window)
+        // Use purchasesClicks for click-attributed (consistent with SP's purchasesNd).
+        // Fall back to purchases (total = click + view) if purchasesClicks is absent.
+        const conversions14d = r != null
+          ? parseInt(this.parsePerformanceNumber(r.purchasesClicks ?? r.purchases), 10) || 0
+          : 0;
+
+        // SB fields: sales / salesClicks (click-attributed sales, 14d window)
+        const sales14d = r != null
+          ? this.parsePerformanceNumber(r.salesClicks ?? r.sales)
+          : 0;
+
+        // SB only supports 14-day attribution. Populate 7d columns with the same value
+        // because the dashboard queries attributed_conversions_7d / attributed_sales_7d.
+        await db.query(
+          `INSERT INTO campaign_performance (
+            campaign_id, report_date, impressions, clicks, cost,
+            attributed_conversions_1d, attributed_conversions_7d,
+            attributed_conversions_14d, attributed_conversions_30d,
+            attributed_sales_1d, attributed_sales_7d,
+            attributed_sales_14d, attributed_sales_30d
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          ON CONFLICT (campaign_id, report_date)
+          DO UPDATE SET
+            impressions = $3,
+            clicks = $4,
+            cost = $5,
+            attributed_conversions_1d = $6,
+            attributed_conversions_7d = $7,
+            attributed_conversions_14d = $8,
+            attributed_conversions_30d = $9,
+            attributed_sales_1d = $10,
+            attributed_sales_7d = $11,
+            attributed_sales_14d = $12,
+            attributed_sales_30d = $13,
+            updated_at = CURRENT_TIMESTAMP`,
+          [
+            campaignId,
+            dbDate,
+            impressions,
+            clicks,
+            cost,
+            0,                // attributed_conversions_1d  — not available for SB
+            conversions14d,   // attributed_conversions_7d  — SB 14d value (dashboard reads this)
+            conversions14d,   // attributed_conversions_14d — SB 14d value
+            0,                // attributed_conversions_30d — not available for SB
+            0,                // attributed_sales_1d        — not available for SB
+            sales14d,         // attributed_sales_7d        — SB 14d value (dashboard reads this)
+            sales14d,         // attributed_sales_14d       — SB 14d value
+            0                 // attributed_sales_30d       — not available for SB
+          ]
+        );
+        synced++;
+        if (synced % 10 === 0 || synced === total) {
+          logger.info(`📊 [SB CAMPAIGNS] Progress: ${synced}/${total} records (${Math.round(synced / total * 100)}%)`);
+        }
+      }
+
+      logger.info(`✅ [SB CAMPAIGNS] Synced ${synced} SB campaign performance records for ${reportDate} (all campaign_type=SB)`);
+      return synced;
+    } catch (error) {
+      logger.error(`❌ [SB CAMPAIGNS] Error syncing SB campaign performance:`, error.message);
       throw error;
     }
   }
@@ -1431,9 +1587,15 @@ class DataSyncService {
         logger.info('─────────────────────────────────────────────────────');
         
         try {
-          // Process campaigns first, then ad groups and keywords in parallel
+          // Process campaigns first (SP), then SB campaign performance, then ad groups and keywords in parallel
           const campaignPerf = await this.syncCampaignPerformance(reportDate);
-          
+          let sbCampaignPerf = 0;
+          try {
+            sbCampaignPerf = await this.syncSBCampaignPerformance(reportDate);
+          } catch (err) {
+            logger.warn(`⚠️  SB campaign performance sync skipped for ${displayDate}: ${err.message}`);
+          }
+
           // Process ad groups, keywords, and ASIN performance in parallel
           const [adGroupPerf, keywordPerf, asinPerf] = await Promise.all([
             this.syncAdGroupPerformance(reportDate),
@@ -1444,8 +1606,8 @@ class DataSyncService {
             })
           ]);
 
-          const dayTotal = campaignPerf + adGroupPerf + keywordPerf + asinPerf;
-          totalRecords.performance += campaignPerf + adGroupPerf + keywordPerf;
+          const dayTotal = campaignPerf + sbCampaignPerf + adGroupPerf + keywordPerf + asinPerf;
+          totalRecords.performance += campaignPerf + sbCampaignPerf + adGroupPerf + keywordPerf;
           totalRecords.asinPerformance += asinPerf;
           
           logger.info(`✅ Day ${i + 1} complete: ${dayTotal} total records synced`);

@@ -1517,6 +1517,92 @@ class AmazonAdsClient {
 
     return reportData;
   }
+
+  /**
+   * Get default metrics for Sponsored Brands (SB) campaign report.
+   *
+   * IMPORTANT: SB uses different column names from SP.
+   * SP has time-windowed columns (purchases1d, purchases7d, sales14d, etc.).
+   * SB has aggregated columns with NO time suffix – 14-day attribution by default:
+   *   purchases, purchasesClicks, sales, salesClicks, unitsSold, unitsSoldClicks
+   *
+   * Official reference (v3 Reporting – Campaign report, Sponsored Brands base metrics):
+   * https://advertising.amazon.com/API/docs/en-us/guides/reporting/v3/report-types/campaign
+   */
+  getDefaultMetricsForSBCampaigns() {
+    return [
+      'date',
+      'campaignId',
+      'campaignName',
+      'campaignStatus',
+      'campaignBudgetAmount',
+      'campaignBudgetType',
+      'impressions',
+      'clicks',
+      'cost',
+      'purchases',
+      'purchasesClicks',
+      'purchasesPromoted',
+      'sales',
+      'salesClicks',
+      'salesPromoted',
+      'unitsSold',
+      'unitsSoldClicks',
+      'newToBrandPurchases',
+      'newToBrandSales',
+      'newToBrandUnitsSold',
+      'detailPageViews',
+      'detailPageViewsClicks',
+      'viewClickThroughRate'
+    ];
+  }
+
+  /**
+   * Request a Sponsored Brands campaign performance report using v3 Reporting API
+   * Populates campaign_performance for SB campaigns (campaign_type = 'SB').
+   * Uses same reporting v3 endpoint as SP; adProduct SPONSORED_BRANDS and reportTypeId sbCampaigns.
+   */
+  async requestSBCampaignReport(reportDate) {
+    logger.info(`Requesting Sponsored Brands campaign performance report for ${reportDate}...`);
+
+    const formattedDate = this.formatDateForAPI(reportDate);
+    const columns = this.getDefaultMetricsForSBCampaigns();
+
+    const reportConfig = {
+      name: `sbCampaigns_${reportDate}`,
+      startDate: formattedDate,
+      endDate: formattedDate,
+      configuration: {
+        adProduct: 'SPONSORED_BRANDS',
+        groupBy: ['campaign'],
+        columns,
+        reportTypeId: 'sbCampaigns',
+        timeUnit: 'DAILY',
+        format: 'GZIP_JSON'
+      }
+    };
+
+    const headers = {
+      'Content-Type': 'application/vnd.createasyncreportrequest.v3+json',
+      'Accept': 'application/vnd.createasyncreportresponse.v3+json'
+    };
+
+    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig, null, 3, 1000, headers);
+    return response.reportId;
+  }
+
+  /**
+   * Get Sponsored Brands campaign performance data for a report date
+   * Returns array of records suitable for campaign_performance table (campaign_id, report_date, impressions, clicks, cost, attributed_conversions_*, attributed_sales_*).
+   */
+  async getSBCampaignPerformanceData(reportDate) {
+    logger.info(`Fetching Sponsored Brands campaign performance data for ${reportDate}...`);
+
+    const reportId = await this.requestSBCampaignReport(reportDate);
+    const reportData = await this.waitAndDownloadReport(reportId);
+
+    return reportData;
+  }
 }
 
 module.exports = AmazonAdsClient;
