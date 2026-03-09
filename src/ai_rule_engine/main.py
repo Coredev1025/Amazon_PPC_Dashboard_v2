@@ -269,6 +269,16 @@ def run_analysis_cycle(config: RuleConfig, db_connector, args, run_id: str = "ru
                 upload_result = sync_manager.upload_approved_recommendations()
                 if upload_result.success:
                     logger.info(f"Upload successful: {upload_result.records_processed} recommendations applied")
+
+        # Sync recommendation_tracking.current_value from entity tables (keywords.bid, ad_groups.default_bid, etc.)
+        # so UI shows actual current values. Called here so it always runs with current engine code.
+        try:
+            from .database import run_sync_recommendation_tracking_from_entities
+            n = run_sync_recommendation_tracking_from_entities(db_connector)
+            if n:
+                logger.info(f"Synced {n} recommendation_tracking rows from entity tables")
+        except Exception as sync_err:
+            logger.warning("Recommendation tracking sync from entities failed: %s", sync_err)
         
         return filtered_recommendations
         

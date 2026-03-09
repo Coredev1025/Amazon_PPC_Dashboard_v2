@@ -1047,7 +1047,11 @@ class DatabaseConnector:
         except Exception as e:
             self.logger.error(f"Error fetching tracked recommendation: {e}")
             return None
-    
+
+    def sync_recommendation_tracking_from_entities(self) -> int:
+        """Update recommendation_tracking from entity tables. Returns number of rows updated."""
+        return _execute_sync_recommendation_tracking(self)
+
     def save_learning_outcome(self, outcome: 'PerformanceOutcome', 
                             intelligence_signals: Optional[Dict[str, Any]] = None) -> bool:
         """
@@ -1246,3 +1250,84 @@ class DatabaseConnector:
         except Exception as e:
             self.logger.error(f"Error updating bid change outcome: {e}")
             return False
+
+
+def _execute_sync_recommendation_tracking(db_connector) -> int:
+    """Run sync SQL using db_connector.get_connection(). Used by method and run_sync_*."""
+    logger = logging.getLogger(__name__)
+    updated = 0
+    try:
+        with db_connector.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE recommendation_tracking rt
+                    SET
+                        current_value = COALESCE(k.bid::float, rt.current_value),
+                        recommended_value = CASE
+                            WHEN rt.current_value IS NOT NULL AND rt.current_value != 0 AND k.bid IS NOT NULL
+                            THEN (k.bid::float) * (rt.recommended_value / rt.current_value)
+                            ELSE rt.recommended_value
+                        END,
+                        updated_at = NOW()
+                    FROM keywords k
+                    WHERE rt.entity_type = 'keyword' AND k.keyword_id = rt.entity_id
+                """)
+                updated += cursor.rowcount
+                cursor.execute("""
+                    UPDATE recommendation_tracking rt
+                    SET
+                        current_value = COALESCE(ag.default_bid::float, rt.current_value),
+                        recommended_value = CASE
+                            WHEN rt.current_value IS NOT NULL AND rt.current_value != 0 AND ag.default_bid IS NOT NULL
+                            THEN (ag.default_bid::float) * (rt.recommended_value / rt.current_value)
+                            ELSE rt.recommended_value
+                        END,
+                        updated_at = NOW()
+                    FROM ad_groups ag
+                    WHERE rt.entity_type = 'ad_group' AND ag.ad_group_id = rt.entity_id
+                """)
+                updated += cursor.rowcount
+                cursor.execute("""
+                    UPDATE recommendation_tracking rt
+                    SET
+                        current_value = COALESCE(c.budget_amount::float, rt.current_value),
+                        recommended_value = CASE
+                            WHEN rt.current_value IS NOT NULL AND rt.current_value != 0 AND c.budget_amount IS NOT NULL
+                            THEN (c.budget_amount::float) * (rt.recommended_value / rt.current_value)
+                            ELSE rt.recommended_value
+                        END,
+                        updated_at = NOW()
+                    FROM campaigns c
+                    WHERE rt.entity_type = 'campaign' AND rt.adjustment_type = 'budget' AND c.campaign_id = rt.entity_id
+                """)
+                updated += cursor.rowcount
+                cursor.execute("""
+                    UPDATE recommendation_tracking rt
+                    SET
+                        current_value = COALESCE(pt.bid::float, rt.current_value),
+                        recommended_value = CASE
+                            WHEN rt.current_value IS NOT NULL AND rt.current_value != 0 AND pt.bid IS NOT NULL
+                            THEN (pt.bid::float) * (rt.recommended_value / rt.current_value)
+                            ELSE rt.recommended_value
+                        END,
+                        updated_at = NOW()
+                    FROM product_targets pt
+                    WHERE rt.entity_type IN ('target', 'product_target') AND rt.adjustment_type = 'bid' AND pt.target_id = rt.entity_id
+                """)
+                updated += cursor.rowcount
+                conn.commit()
+        if updated:
+            logger.info("Synced current_value and recommended_value for %s recommendation_tracking rows from entity tables", updated)
+    except Exception as e:
+        logger.error("Error syncing recommendation_tracking from entities: %s", e, exc_info=True)
+    return updated
+
+
+def run_sync_recommendation_tracking_from_entities(db_connector) -> int:
+    """
+    Module-level entry point: update recommendation_tracking from entity tables.
+    Call from run_analysis_cycle so sync always runs with current engine code.
+    """
+    if hasattr(db_connector, 'sync_recommendation_tracking_from_entities'):
+        return db_connector.sync_recommendation_tracking_from_entities()
+    return _execute_sync_recommendation_tracking(db_connector)
