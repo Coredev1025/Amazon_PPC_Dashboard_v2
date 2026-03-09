@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Download,
@@ -11,6 +11,7 @@ import {
   Package,
   Tag,
 } from 'lucide-react';
+import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
 import SmartGrid, { type Column } from '@/components/SmartGrid';
 import { fetchProductTargets, type ProductTarget } from '@/utils/api';
 import {
@@ -22,6 +23,10 @@ import {
   cn,
 } from '@/utils/helpers';
 
+function formatDateForApi(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
 interface ProductTargetingExtended extends ProductTarget {
   targetingTypeBadge?: string;
   profitability?: 'profitable' | 'breakeven' | 'unprofitable';
@@ -30,6 +35,13 @@ interface ProductTargetingExtended extends ProductTarget {
 const DAYS = 7;
 
 export default function ProductTargetingPage() {
+  const [dateRange, setDateRange] = useState<DateRange>(() => {
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+    const start = new Date(2020, 0, 1);
+    start.setHours(0, 0, 0, 0);
+    return { type: 'lifetime', startDate: start, endDate: end };
+  });
   const [targetingTypeFilter, setTargetingTypeFilter] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<string>('all');
   const [selectedRows, setSelectedRows] = useState<Set<string | number>>(new Set());
@@ -39,8 +51,15 @@ export default function ProductTargetingPage() {
 
   const queryClient = useQueryClient();
 
+  useEffect(() => {
+    setPage(1);
+  }, [dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString()]);
+
+  const campaignStartFrom = dateRange.startDate ? formatDateForApi(dateRange.startDate) : undefined;
+  const campaignStartTo = dateRange.endDate ? formatDateForApi(dateRange.endDate) : undefined;
+
   const { data: targetingResponse, isLoading, refetch } = useQuery({
-    queryKey: ['product-targets', targetingTypeFilter, stateFilter, page, pageSize, sort?.sortKey ?? null, sort?.sortDirection ?? null],
+    queryKey: ['product-targets', targetingTypeFilter, stateFilter, page, pageSize, sort?.sortKey ?? null, sort?.sortDirection ?? null, campaignStartFrom ?? null, campaignStartTo ?? null],
     queryFn: async () => {
       const res = await fetchProductTargets({
         days: DAYS,
@@ -50,6 +69,8 @@ export default function ProductTargetingPage() {
         page_size: pageSize,
         sort_by: sort?.sortKey,
         sort_order: sort?.sortDirection,
+        campaign_start_from: campaignStartFrom,
+        campaign_start_to: campaignStartTo,
       });
       return {
         ...res,
@@ -273,7 +294,15 @@ export default function ProductTargetingPage() {
 
       {/* Filters */}
       <div className="card p-4 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="label">Campaign start date range</label>
+            <DateRangePicker
+              value={dateRange}
+              onChange={setDateRange}
+              className="w-full"
+            />
+          </div>
           <div>
             <label className="label">Targeting Type</label>
             <select

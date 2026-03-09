@@ -2297,6 +2297,8 @@ async def get_product_targeting(
     page_size: int = Query(50, ge=1, le=200),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = Query("asc", regex="^(asc|desc)$"),
+    campaign_start_from: Optional[str] = Query(None, description="Filter by campaigns.start_date >= (YYYY-MM-DD)"),
+    campaign_start_to: Optional[str] = Query(None, description="Filter by campaigns.start_date <= (YYYY-MM-DD)"),
 ):
     """Get product targeting data from DB with performance from keyword_performance."""
     try:
@@ -2321,6 +2323,12 @@ async def get_product_targeting(
                 if state:
                     where_clauses.append("LOWER(pt.state) = LOWER(%s)")
                     params.append(state)
+                if campaign_start_from and campaign_start_to:
+                    where_clauses.append(
+                        "pt.campaign_id IN (SELECT campaign_id FROM campaigns WHERE start_date IS NOT NULL AND start_date >= %s AND start_date <= %s)"
+                    )
+                    params.append(campaign_start_from)
+                    params.append(campaign_start_to)
 
                 where_sql = " AND ".join(where_clauses)
 
@@ -2343,7 +2351,8 @@ async def get_product_targeting(
                 total_pages = max(1, (total + page_size - 1) // page_size)
 
                 offset = (page - 1) * page_size
-                params_main = [start_date, end_date] + list(params) + [page_size, offset]
+                # Placeholder order: CTE WHERE (params), then LATERAL (start_date, end_date), then LIMIT/OFFSET
+                params_main = list(params) + [start_date, end_date] + [page_size, offset]
 
                 query = f"""
                     WITH {latest_cte}
