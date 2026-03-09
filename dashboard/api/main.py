@@ -2268,6 +2268,24 @@ async def unlock_keyword_bid(keyword_id: int, current_user: UserResponse = Depen
 # API ENDPOINTS - PRODUCT TARGETING (DISTINCT FROM KEYWORDS)
 # ============================================================================
 
+# Valid sort columns for product targeting (frontend key -> SQL expression)
+PRODUCT_TARGETING_SORT_COLUMNS = {
+    "targeting_id": "pt.target_id",
+    "targeting_value": "pt.target_value",
+    "targeting_type": "pt.target_type",
+    "campaign_name": "c.campaign_name",
+    "ad_group_name": "ag.ad_group_name",
+    "bid": "pt.bid",
+    "state": "pt.state",
+    "impressions": "perf.impressions",
+    "clicks": "perf.clicks",
+    "spend": "perf.spend",
+    "sales": "perf.sales",
+    "acos": "(CASE WHEN perf.sales > 0 THEN perf.spend / perf.sales * 100 ELSE NULL END)",
+    "roas": "(CASE WHEN perf.spend > 0 THEN perf.sales / perf.spend ELSE NULL END)",
+}
+
+
 @app.get("/api/product-targeting")
 async def get_product_targeting(
     campaign_id: Optional[int] = None,
@@ -2277,6 +2295,8 @@ async def get_product_targeting(
     days: int = Query(7, ge=1, le=90),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = Query("asc", regex="^(asc|desc)$"),
 ):
     """Get product targeting data from DB with performance from keyword_performance."""
     try:
@@ -2304,7 +2324,20 @@ async def get_product_targeting(
 
                 where_sql = " AND ".join(where_clauses)
 
-                count_sql = f"SELECT COUNT(*) AS cnt FROM product_targets pt WHERE {where_sql}"
+                order_dir = "DESC" if (sort_order or "asc").lower() == "desc" else "ASC"
+                order_col = PRODUCT_TARGETING_SORT_COLUMNS.get((sort_by or "").strip().lower(), "pt.target_id")
+                order_sql = f"ORDER BY {order_col} {order_dir} NULLS LAST"
+
+                # One row per (campaign_id, ad_group_id): the one with the largest id (most recent row in product_targets)
+                latest_cte = f"""
+                    latest AS (
+                        SELECT pt.campaign_id, pt.ad_group_id, MAX(pt.id) AS max_id
+                        FROM product_targets pt
+                        WHERE {where_sql}
+                        GROUP BY pt.campaign_id, pt.ad_group_id
+                    )
+                """
+                count_sql = f"WITH {latest_cte} SELECT COUNT(*) AS cnt FROM latest"
                 cursor.execute(count_sql, params)
                 total = cursor.fetchone()["cnt"]
                 total_pages = max(1, (total + page_size - 1) // page_size)
@@ -2313,6 +2346,7 @@ async def get_product_targeting(
                 params_main = [start_date, end_date] + list(params) + [page_size, offset]
 
                 query = f"""
+                    WITH {latest_cte}
                     SELECT
                         pt.target_id   AS targeting_id,
                         pt.target_value AS targeting_value,
@@ -2328,6 +2362,7 @@ async def get_product_targeting(
                         perf.spend,
                         perf.sales
                     FROM product_targets pt
+                    INNER JOIN latest l ON pt.id = l.max_id
                     LEFT JOIN campaigns c  ON pt.campaign_id  = c.campaign_id
                     LEFT JOIN ad_groups ag ON pt.ad_group_id  = ag.ad_group_id
                     LEFT JOIN LATERAL (
@@ -2341,8 +2376,7 @@ async def get_product_targeting(
                           AND cp.report_date >= %s
                           AND cp.report_date <= %s
                     ) perf ON TRUE
-                    WHERE {where_sql}
-                    ORDER BY pt.target_id
+                    {order_sql}
                     LIMIT %s OFFSET %s
                 """
 

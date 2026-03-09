@@ -968,6 +968,8 @@ export const fetchProductTargets = async (params: {
   limit?: number;
   page?: number;
   page_size?: number;
+  sort_by?: string;
+  sort_order?: 'asc' | 'desc';
 }): Promise<PaginatedResponse<ProductTarget>> => {
   const queryParams = new URLSearchParams();
   if (params.campaign_id) queryParams.append('campaign_id', params.campaign_id.toString());
@@ -978,7 +980,9 @@ export const fetchProductTargets = async (params: {
   if (params.limit) queryParams.append('limit', params.limit.toString());
   queryParams.append('page', (params.page ?? 1).toString());
   queryParams.append('page_size', (params.page_size ?? 50).toString());
-  
+  if (params.sort_by) queryParams.append('sort_by', params.sort_by);
+  if (params.sort_order) queryParams.append('sort_order', params.sort_order);
+
   const response = await api.get(`/api/product-targeting?${queryParams.toString()}`);
   return response.data;
 };

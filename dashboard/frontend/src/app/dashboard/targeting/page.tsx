@@ -35,11 +35,12 @@ export default function ProductTargetingPage() {
   const [selectedRows, setSelectedRows] = useState<Set<string | number>>(new Set());
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
-  
+  const [sort, setSort] = useState<{ sortKey: string; sortDirection: 'asc' | 'desc' } | null>(null);
+
   const queryClient = useQueryClient();
 
   const { data: targetingResponse, isLoading, refetch } = useQuery({
-    queryKey: ['product-targets', targetingTypeFilter, stateFilter, page, pageSize],
+    queryKey: ['product-targets', targetingTypeFilter, stateFilter, page, pageSize, sort?.sortKey ?? null, sort?.sortDirection ?? null],
     queryFn: async () => {
       const res = await fetchProductTargets({
         days: DAYS,
@@ -47,6 +48,8 @@ export default function ProductTargetingPage() {
         state: stateFilter !== 'all' ? stateFilter : undefined,
         page,
         page_size: pageSize,
+        sort_by: sort?.sortKey,
+        sort_order: sort?.sortDirection,
       });
       return {
         ...res,
@@ -310,6 +313,11 @@ export default function ProductTargetingPage() {
           emptyMessage="No product targets found. Create some ASIN, Category, or Brand targets to get started."
           enableSelection={true}
           selectedRows={selectedRows}
+          sort={sort}
+          onSortChange={(key, direction) => {
+            setSort({ sortKey: key, sortDirection: direction });
+            setPage(1);
+          }}
           pagination={targetingResponse ? {
             page: targetingResponse.page,
             pageSize: targetingResponse.page_size,

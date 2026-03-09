@@ -71,6 +71,9 @@ interface SmartGridProps<T extends Record<string, unknown>> {
   onPageSizeChange?: (pageSize: number) => void;
   /** When true, table has no horizontal scroll (no scrollbar, content can wrap/overflow naturally) */
   disableTableScroll?: boolean;
+  /** Server-side sort: controlled sort state and callback. When set, grid does not sort locally. */
+  sort?: { sortKey: string; sortDirection: 'asc' | 'desc' } | null;
+  onSortChange?: (key: string, direction: 'asc' | 'desc') => void;
 }
 
 export default function SmartGrid<T extends Record<string, unknown>>({
@@ -104,11 +107,16 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   onPageChange,
   onPageSizeChange,
   disableTableScroll = false,
+  sort: controlledSort = null,
+  onSortChange: onSortChangeProp = undefined,
 }: SmartGridProps<T>) {
   const gridToast = useToast();
   const [editingCell, setEditingCell] = useState<{ rowId: string | number; column: string } | null>(null);
   const [editValue, setEditValue] = useState<any>('');
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+  // When we have server-side pagination and onSortChange, always use server-side sort so sort applies to full dataset
+  const serverSideSort = Boolean(pagination && onSortChangeProp);
+  const effectiveSort = serverSideSort ? (controlledSort ?? sortConfig) : sortConfig;
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
   const [resizingColumn, setResizingColumn] = useState<string | null>(null);
@@ -296,11 +304,14 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   }, []);
 
   const handleSort = (key: string) => {
-    let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig?.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc';
+    const currentKey = effectiveSort && ('sortKey' in effectiveSort ? effectiveSort.sortKey : effectiveSort.key);
+    const currentDir = effectiveSort && ('sortDirection' in effectiveSort ? effectiveSort.sortDirection : effectiveSort.direction);
+    const direction: 'asc' | 'desc' = (currentKey === key && currentDir === 'asc') ? 'desc' : 'asc';
+    if (serverSideSort && onSortChangeProp) {
+      onSortChangeProp(key, direction);
+    } else {
+      setSortConfig({ key, direction });
     }
-    setSortConfig({ key, direction });
   };
 
   // Apply filters to data
@@ -347,26 +358,28 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   }, [data, statusFilter, columnFilters, onStatusFilterChange]);
 
   const sortedData = useMemo(() => {
-    if (!sortConfig) return filteredData;
+    if (serverSideSort) return filteredData;
+    const config = sortConfig;
+    if (!config) return filteredData;
 
     return [...filteredData].sort((a, b) => {
-      const aVal = a[sortConfig.key as keyof T];
-      const bVal = b[sortConfig.key as keyof T];
+      const aVal = a[config.key as keyof T];
+      const bVal = b[config.key as keyof T];
 
       if (aVal === null || aVal === undefined) return 1;
       if (bVal === null || bVal === undefined) return -1;
 
       if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+        return config.direction === 'asc' ? aVal - bVal : bVal - aVal;
       }
 
       const aStr = String(aVal);
       const bStr = String(bVal);
-      return sortConfig.direction === 'asc'
+      return config.direction === 'asc'
         ? aStr.localeCompare(bStr)
         : bStr.localeCompare(aStr);
     });
-  }, [filteredData, sortConfig]);
+  }, [filteredData, sortConfig, serverSideSort]);
 
   const handleCellClick = (row: T, column: Column<T>) => {
     // Prevent editing if item is out of stock (bidding protection)
@@ -876,8 +889,8 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                           {column.header}
                           {column.sortable && (
                             <span className="text-gray-400">
-                              {sortConfig?.key === columnKey ? (
-                                sortConfig.direction === 'asc' ? (
+                              {((effectiveSort as { key?: string; sortKey?: string })?.key ?? (effectiveSort as { sortKey?: string })?.sortKey) === columnKey ? (
+                                ((effectiveSort as { direction?: string; sortDirection?: string })?.direction ?? (effectiveSort as { sortDirection?: string })?.sortDirection) === 'asc' ? (
                                   <ChevronUp className="w-3 h-3" />
                                 ) : (
                                   <ChevronDown className="w-3 h-3" />
