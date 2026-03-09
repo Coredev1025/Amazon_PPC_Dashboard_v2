@@ -891,8 +891,11 @@ class AmazonAdsClient {
        'Accept': 'application/vnd.sdcampaign.v3+json, application/json'
     };
 
-    // Perform GET request
-    return await this.makeRequest('GET', '/sd/campaigns', null, params, 3, 100, customHeaders);
+    // Perform GET request; normalize response (API may return { campaigns: [...] } or array)
+    const result = await this.makeRequest('GET', '/sd/campaigns', null, params, 3, 100, customHeaders);
+    if (Array.isArray(result)) return result;
+    if (result && Array.isArray(result.campaigns)) return result.campaigns;
+    return [];
   }
 
   /**
@@ -1599,6 +1602,71 @@ class AmazonAdsClient {
     logger.info(`Fetching Sponsored Brands campaign performance data for ${reportDate}...`);
 
     const reportId = await this.requestSBCampaignReport(reportDate);
+    const reportData = await this.waitAndDownloadReport(reportId);
+
+    return reportData;
+  }
+
+  /**
+   * Default metrics for Sponsored Display campaign report (v3 Reporting API).
+   * SD uses purchasesClicks/salesClicks (not purchases1d/7d/14d/30d, sales1d/7d/14d/30d).
+   * Only columns in the API's allowed list may be requested.
+   */
+  getDefaultMetricsForSDCampaigns() {
+    return [
+      'date',
+      'campaignId',
+      'campaignName',
+      'impressions',
+      'clicks',
+      'cost',
+      'purchasesClicks',
+      'salesClicks'
+    ];
+  }
+
+  /**
+   * Request a Sponsored Display campaign performance report using v3 Reporting API.
+   * Populates campaign_performance for SD campaigns (campaign_type = 'SD').
+   * adProduct SPONSORED_DISPLAY, reportTypeId sdCampaigns.
+   */
+  async requestSDCampaignReport(reportDate) {
+    logger.info(`Requesting Sponsored Display campaign performance report for ${reportDate}...`);
+
+    const formattedDate = this.formatDateForAPI(reportDate);
+    const columns = this.getDefaultMetricsForSDCampaigns();
+
+    const reportConfig = {
+      name: `sdCampaigns_${reportDate}`,
+      startDate: formattedDate,
+      endDate: formattedDate,
+      configuration: {
+        adProduct: 'SPONSORED_DISPLAY',
+        groupBy: ['campaign'],
+        columns,
+        reportTypeId: 'sdCampaigns',
+        timeUnit: 'DAILY',
+        format: 'GZIP_JSON'
+      }
+    };
+
+    const headers = {
+      'Content-Type': 'application/vnd.createasyncreportrequest.v3+json',
+      'Accept': 'application/vnd.createasyncreportresponse.v3+json'
+    };
+
+    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig, null, 3, 1000, headers);
+    return response.reportId;
+  }
+
+  /**
+   * Get Sponsored Display campaign performance data for a report date.
+   * Returns raw report data (array or array-of-arrays); use normalizeReportRows in dataSync before mapping.
+   */
+  async getSDCampaignPerformanceData(reportDate) {
+    logger.info(`Fetching Sponsored Display campaign performance data for ${reportDate}...`);
+
+    const reportId = await this.requestSDCampaignReport(reportDate);
     const reportData = await this.waitAndDownloadReport(reportId);
 
     return reportData;

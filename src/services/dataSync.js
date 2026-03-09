@@ -696,6 +696,129 @@ class DataSyncService {
   }
 
   /**
+   * Sync Sponsored Display (SD) campaign performance into campaign_performance.
+   * Uses v3 Reporting API with adProduct SPONSORED_DISPLAY, reportTypeId sdCampaigns.
+   * SD reports use purchasesClicks/salesClicks (not 1d/7d/14d/30d); we map to 7d/14d for dashboard compatibility.
+   */
+  async syncSDCampaignPerformance(reportDate) {
+    try {
+      logger.info(`📊 [SD CAMPAIGNS] Syncing Sponsored Display campaign performance for ${reportDate}...`);
+
+      const dbDate = this.formatDateForDB(reportDate);
+
+      const sdCampaignsResult = await db.query(
+        'SELECT campaign_id FROM campaigns WHERE campaign_type = $1',
+        ['SD']
+      );
+      const allSDCampaignIds = (sdCampaignsResult.rows || []).map(r => String(r.campaign_id));
+      if (allSDCampaignIds.length === 0) {
+        logger.info(`📊 [SD CAMPAIGNS] No SD campaigns in campaigns table for ${reportDate}`);
+        return 0;
+      }
+      logger.info(`📊 [SD CAMPAIGNS] Found ${allSDCampaignIds.length} SD campaigns in DB`);
+
+      let reportData = [];
+      try {
+        const raw = await this.client.getSDCampaignPerformanceData(reportDate);
+        reportData = this.normalizeReportRows(raw);
+        logger.info(`📊 [SD CAMPAIGNS] API returned ${reportData.length} records for ${reportDate}`);
+      } catch (apiError) {
+        logger.warn(`⚠️  [SD CAMPAIGNS] SD campaign performance API error for ${reportDate}: ${apiError.message}`);
+      }
+
+      const apiByCampaignId = new Map();
+      for (const record of reportData) {
+        const campaignId = (record.campaignId ?? record.campaign_id) != null
+          ? String(record.campaignId ?? record.campaign_id)
+          : null;
+        if (campaignId && allSDCampaignIds.includes(campaignId)) {
+          apiByCampaignId.set(campaignId, record);
+        }
+      }
+      logger.info(`📊 [SD CAMPAIGNS] Matched ${apiByCampaignId.size} API records to SD campaigns`);
+
+      const get = (r, ...keys) => {
+        if (r == null) return undefined;
+        for (const k of keys) {
+          const v = r[k];
+          if (v !== undefined && v !== null && v !== '') return v;
+        }
+        return undefined;
+      };
+
+      let synced = 0;
+      const total = allSDCampaignIds.length;
+
+      for (const campaignId of allSDCampaignIds) {
+        if (synced > 0 && synced % this.config.batchSize === 0) {
+          await new Promise(resolve => setTimeout(resolve, this.config.rateLimitDelay));
+        }
+
+        const r = apiByCampaignId.get(campaignId);
+        const impressions = r != null ? parseInt(this.parsePerformanceNumber(get(r, 'impressions')), 10) || 0 : 0;
+        const clicks = r != null ? parseInt(this.parsePerformanceNumber(get(r, 'clicks')), 10) || 0 : 0;
+        const cost = r != null ? this.parsePerformanceNumber(get(r, 'cost', 'spend')) : 0;
+        // SD API returns purchasesClicks / salesClicks (no 1d/7d/14d/30d); map to 7d/14d for dashboard
+        const conversions = r != null
+          ? parseInt(this.parsePerformanceNumber(get(r, 'purchasesClicks', 'purchases_clicks', 'purchases')), 10) || 0
+          : 0;
+        const salesVal = r != null
+          ? this.parsePerformanceNumber(get(r, 'salesClicks', 'sales_clicks', 'sales'))
+          : 0;
+
+        await db.query(
+          `INSERT INTO campaign_performance (
+            campaign_id, report_date, impressions, clicks, cost,
+            attributed_conversions_1d, attributed_conversions_7d,
+            attributed_conversions_14d, attributed_conversions_30d,
+            attributed_sales_1d, attributed_sales_7d,
+            attributed_sales_14d, attributed_sales_30d
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          ON CONFLICT (campaign_id, report_date)
+          DO UPDATE SET
+            impressions = $3,
+            clicks = $4,
+            cost = $5,
+            attributed_conversions_1d = $6,
+            attributed_conversions_7d = $7,
+            attributed_conversions_14d = $8,
+            attributed_conversions_30d = $9,
+            attributed_sales_1d = $10,
+            attributed_sales_7d = $11,
+            attributed_sales_14d = $12,
+            attributed_sales_30d = $13,
+            updated_at = CURRENT_TIMESTAMP`,
+          [
+            campaignId,
+            dbDate,
+            impressions,
+            clicks,
+            cost,
+            0,           // attributed_conversions_1d — not in SD report
+            conversions, // attributed_conversions_7d
+            conversions, // attributed_conversions_14d
+            0,           // attributed_conversions_30d — not in SD report
+            0,           // attributed_sales_1d
+            salesVal,    // attributed_sales_7d
+            salesVal,    // attributed_sales_14d
+            0            // attributed_sales_30d — not in SD report
+          ]
+        );
+        synced++;
+        if (synced % 10 === 0 || synced === total) {
+          logger.info(`📊 [SD CAMPAIGNS] Progress: ${synced}/${total} records (${Math.round(synced / total * 100)}%)`);
+        }
+      }
+
+      logger.info(`✅ [SD CAMPAIGNS] Synced ${synced} SD campaign performance records for ${reportDate}`);
+      return synced;
+    } catch (error) {
+      logger.error(`❌ [SD CAMPAIGNS] Error syncing SD campaign performance:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Sync performance data for ad groups
    * v3 API now returns campaignId in report data
    */
@@ -1627,6 +1750,12 @@ class DataSyncService {
           } catch (err) {
             logger.warn(`⚠️  SB campaign performance sync skipped for ${displayDate}: ${err.message}`);
           }
+          let sdCampaignPerf = 0;
+          try {
+            sdCampaignPerf = await this.syncSDCampaignPerformance(reportDate);
+          } catch (err) {
+            logger.warn(`⚠️  SD campaign performance sync skipped for ${displayDate}: ${err.message}`);
+          }
 
           // Process ad groups, keywords, and ASIN performance in parallel
           const [adGroupPerf, keywordPerf, asinPerf] = await Promise.all([
@@ -1638,8 +1767,8 @@ class DataSyncService {
             })
           ]);
 
-          const dayTotal = campaignPerf + sbCampaignPerf + adGroupPerf + keywordPerf + asinPerf;
-          totalRecords.performance += campaignPerf + sbCampaignPerf + adGroupPerf + keywordPerf;
+          const dayTotal = campaignPerf + sbCampaignPerf + sdCampaignPerf + adGroupPerf + keywordPerf + asinPerf;
+          totalRecords.performance += campaignPerf + sbCampaignPerf + sdCampaignPerf + adGroupPerf + keywordPerf;
           totalRecords.asinPerformance += asinPerf;
           
           logger.info(`✅ Day ${i + 1} complete: ${dayTotal} total records synced`);
