@@ -46,6 +46,7 @@ export default function KeywordsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
   const [exporting, setExporting] = useState(false);
+  const [sort, setSort] = useState<{ sortKey: string; sortDirection: 'asc' | 'desc' } | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -58,7 +59,7 @@ export default function KeywordsPage() {
   const days = dateRange.days || (dateRange.type === 'last_7_days' ? 7 : dateRange.type === 'last_14_days' ? 14 : dateRange.type === 'last_30_days' ? 30 : 7);
 
   const { data: keywordsResponse, isLoading, refetch } = useQuery({
-    queryKey: ['keywords', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), page, pageSize, urlKeywordId, stateFilter, matchTypeFilter],
+    queryKey: ['keywords', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), page, pageSize, urlKeywordId, stateFilter, matchTypeFilter, sort?.sortKey ?? null, sort?.sortDirection ?? null],
     queryFn: () =>
       fetchKeywords({
         days,
@@ -67,6 +68,8 @@ export default function KeywordsPage() {
         ...(urlKeywordId ? { keyword_id: urlKeywordId } : {}),
         ...(stateFilter && stateFilter !== 'all' ? { state: stateFilter } : {}),
         ...(matchTypeFilter && matchTypeFilter !== 'all' ? { match_type: matchTypeFilter } : {}),
+        sort_by: sort?.sortKey,
+        sort_order: sort?.sortDirection,
       }),
   });
 
@@ -599,6 +602,11 @@ export default function KeywordsPage() {
         onPageChange={setPage}
         onPageSizeChange={(newSize) => {
           setPageSize(newSize);
+          setPage(1);
+        }}
+        sort={sort}
+        onSortChange={(key, direction) => {
+          setSort({ sortKey: key, sortDirection: direction });
           setPage(1);
         }}
         onCellEdit={async (row, column, newValue) => {

@@ -599,7 +599,9 @@ export const fetchCampaigns = async (
   startDate?: Date,
   endDate?: Date,
   status?: string,
-  campaignType?: string
+  campaignType?: string,
+  sortBy?: string,
+  sortOrder?: 'asc' | 'desc'
 ): Promise<PaginatedResponse<Campaign>> => {
   const params = new URLSearchParams({ page: page.toString(), page_size: pageSize.toString() });
   if (startDate && endDate) {
@@ -614,6 +616,8 @@ export const fetchCampaigns = async (
   if (campaignType && campaignType !== 'all' && ['SP', 'SB', 'SD'].includes(campaignType)) {
     params.append('campaign_type', campaignType);
   }
+  if (sortBy) params.append('sort_by', sortBy);
+  if (sortOrder) params.append('sort_order', sortOrder);
   const response = await api.get(`/api/campaigns?${params.toString()}`);
   return response.data;
 };
@@ -944,6 +948,8 @@ export const fetchKeywords = async (params: {
   page_size?: number;
   state?: string;
   match_type?: string;
+  sort_by?: string;
+  sort_order?: 'asc' | 'desc';
 }): Promise<PaginatedResponse<Keyword>> => {
   const queryParams = new URLSearchParams();
   if (params.keyword_id) queryParams.append('keyword_id', params.keyword_id.toString());
@@ -954,6 +960,8 @@ export const fetchKeywords = async (params: {
   if (params.match_type && params.match_type.toLowerCase() !== 'all') queryParams.append('match_type', params.match_type);
   queryParams.append('page', (params.page || 1).toString());
   queryParams.append('page_size', (params.page_size || 50).toString());
+  if (params.sort_by) queryParams.append('sort_by', params.sort_by);
+  if (params.sort_order) queryParams.append('sort_order', params.sort_order);
 
   const response = await api.get(`/api/keywords?${queryParams.toString()}`);
   return response.data;

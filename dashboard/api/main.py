@@ -1731,6 +1731,11 @@ async def get_ai_insights(days: int = Query(7, ge=1, le=90)):
 # API ENDPOINTS - CAMPAIGN MANAGEMENT
 # ============================================================================
 
+_CAMPAIGNS_SORT_COLUMNS = frozenset({
+    "campaign_name", "status", "spend", "sales", "acos", "roas", "orders",
+    "impressions", "clicks", "budget", "ctr", "cvr",
+})
+
 @app.get("/api/campaigns")
 async def get_campaigns(
     campaign_id: Optional[int] = Query(None, description="Filter by campaign ID"),
@@ -1742,6 +1747,8 @@ async def get_campaigns(
     status: Optional[str] = Query(None, description="Filter by status: enabled, paused, archived, or omit for all"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=200, description="Items per page"),
+    sort_by: Optional[str] = Query(None, description="Sort column key"),
+    sort_order: Optional[str] = Query("asc", regex="^(asc|desc)$", description="Sort direction"),
 ):
     """Get campaigns with performance data (paginated). Use either days or start_date+end_date. campaign_type filters by campaigns.campaign_type (SP, SB, SD)."""
     try:
@@ -1793,6 +1800,19 @@ async def get_campaigns(
                 portfolio_id=campaign.get('portfolio_id'),
                 portfolio_name=campaign.get('portfolio_name')
             ))
+        
+        # Server-side sort (applies to full dataset before pagination)
+        order = (sort_order or "asc").lower()
+        if sort_by and sort_by in _CAMPAIGNS_SORT_COLUMNS:
+            def _sort_key(item: CampaignData):
+                val = getattr(item, sort_by, None)
+                # None last in both directions
+                tie = 1 if val is None else 0
+                if val is None:
+                    return (tie, 0 if sort_by in ("spend", "sales", "acos", "roas", "orders", "impressions", "clicks", "budget", "ctr", "cvr") else "")
+                return (tie, val if isinstance(val, (int, float)) else str(val).lower())
+            reverse = order == "desc"
+            all_results.sort(key=_sort_key, reverse=reverse)
         
         # Paginate
         total = len(all_results)
@@ -1957,6 +1977,19 @@ async def apply_campaign_action(campaign_id: int, action: ActionRequest, backgro
 # API ENDPOINTS - KEYWORDS / TARGETING
 # ============================================================================
 
+_KEYWORDS_SORT_COLUMNS = {
+    "keyword_text": "k.keyword_text",
+    "match_type": "k.match_type",
+    "bid": "k.bid",
+    "state": "k.state",
+    "impressions": "COALESCE(SUM(kp.impressions), 0)",
+    "clicks": "COALESCE(SUM(kp.clicks), 0)",
+    "spend": "COALESCE(SUM(kp.cost), 0)",
+    "sales": "COALESCE(SUM(kp.attributed_sales_7d), 0)",
+    "orders": "COALESCE(SUM(kp.attributed_conversions_7d), 0)",
+    "acos": "CASE WHEN COALESCE(SUM(kp.attributed_sales_7d), 0) > 0 THEN COALESCE(SUM(kp.cost), 0) / NULLIF(SUM(kp.attributed_sales_7d), 0) * 100 ELSE NULL END",
+}
+
 @app.get("/api/keywords")
 async def get_keywords(
     keyword_id: Optional[int] = None,
@@ -1967,6 +2000,8 @@ async def get_keywords(
     days: int = Query(7, ge=1, le=90),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    sort_by: Optional[str] = Query(None, description="Sort column key"),
+    sort_order: Optional[str] = Query("asc", regex="^(asc|desc)$", description="Sort direction"),
 ):
     """Get keywords with performance data (server-side pagination)"""
     try:
@@ -2009,6 +2044,10 @@ async def get_keywords(
                 if total == 0:
                     return {"data": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 1}
 
+                order_col = _KEYWORDS_SORT_COLUMNS.get(sort_by, "COALESCE(SUM(kp.cost), 0)")
+                order_dir = (sort_order or "asc").upper()
+                order_sql = f"ORDER BY {order_col} {order_dir} NULLS LAST"
+
                 cur.execute(f"""
                     SELECT
                         k.keyword_id, k.keyword_text, k.match_type, k.bid, k.state,
@@ -2025,7 +2064,7 @@ async def get_keywords(
                     WHERE {where_clause}
                     GROUP BY k.keyword_id, k.keyword_text, k.match_type, k.bid, k.state,
                              k.ad_group_id, ag.campaign_id
-                    ORDER BY spend DESC
+                    {order_sql}
                     LIMIT %s OFFSET %s
                 """, params + [page_size, offset])
                 rows = cur.fetchall()

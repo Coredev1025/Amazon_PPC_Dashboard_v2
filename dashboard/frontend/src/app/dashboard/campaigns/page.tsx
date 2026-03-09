@@ -137,6 +137,8 @@ export default function HierarchicalCampaignManager() {
   const [adsPageSize, setAdsPageSize] = useState(5);
   const [keywordPage, setKeywordPage] = useState(1);
   const [keywordPageSize, setKeywordPageSize] = useState(5);
+  const [campaignSort, setCampaignSort] = useState<{ sortKey: string; sortDirection: 'asc' | 'desc' } | null>(null);
+  const [keywordSort, setKeywordSort] = useState<{ sortKey: string; sortDirection: 'asc' | 'desc' } | null>(null);
 
   const queryClient = useQueryClient();
   const days = useMemo(() => {
@@ -241,6 +243,8 @@ export default function HierarchicalCampaignManager() {
       dateRange.startDate?.toISOString(),
       dateRange.endDate?.toISOString(),
       statusFilter,
+      campaignSort?.sortKey ?? null,
+      campaignSort?.sortDirection ?? null,
     ],
     queryFn: () =>
       fetchCampaigns(
@@ -252,7 +256,9 @@ export default function HierarchicalCampaignManager() {
         dateRange.startDate,
         dateRange.endDate,
         statusFilter,
-        campaignTypeFilter
+        campaignTypeFilter,
+        campaignSort?.sortKey,
+        campaignSort?.sortDirection
       ),
     enabled: activeTab === 'campaigns' || activeTab === 'ad_groups' || activeTab === 'ads' || activeTab === 'keywords' || activeTab === 'targeting' || activeTab === 'search_terms' || activeTab === 'placements',
   });
@@ -276,8 +282,15 @@ export default function HierarchicalCampaignManager() {
   const adsPagination = adsResponse ? { page: adsResponse.page, pageSize: adsResponse.page_size, total: adsResponse.total, totalPages: adsResponse.total_pages } : undefined;
 
   const { data: keywordsResponse, isLoading: keywordsLoading } = useQuery({
-    queryKey: ['keywords', selectedAdGroup?.id, days, keywordPage, keywordPageSize],
-    queryFn: () => fetchKeywords({ ad_group_id: selectedAdGroup?.id, days, page: keywordPage, page_size: keywordPageSize }),
+    queryKey: ['keywords', selectedAdGroup?.id, days, keywordPage, keywordPageSize, keywordSort?.sortKey ?? null, keywordSort?.sortDirection ?? null],
+    queryFn: () => fetchKeywords({
+      ad_group_id: selectedAdGroup?.id,
+      days,
+      page: keywordPage,
+      page_size: keywordPageSize,
+      sort_by: keywordSort?.sortKey,
+      sort_order: keywordSort?.sortDirection,
+    }),
     enabled: activeTab === 'keywords' && selectedAdGroup !== null,
   });
   const keywords = keywordsResponse?.data;
@@ -1032,6 +1045,14 @@ export default function HierarchicalCampaignManager() {
         pagination={campaignPagination}
         onPageChange={(p) => { setCampaignPage(p); setSelectedRows(new Set()); }}
         onPageSizeChange={(s) => preserveScroll(() => { setCampaignPageSize(s); setCampaignPage(1); setSelectedRows(new Set()); })}
+        sort={campaignSort}
+        onSortChange={(key, direction) => {
+          preserveScroll(() => {
+            setCampaignSort({ sortKey: key, sortDirection: direction });
+            setCampaignPage(1);
+            setSelectedRows(new Set());
+          });
+        }}
         />
       </div>
     );
@@ -1312,6 +1333,13 @@ export default function HierarchicalCampaignManager() {
         pagination={keywordPagination}
         onPageChange={setKeywordPage}
         onPageSizeChange={(s) => preserveScroll(() => { setKeywordPageSize(s); setKeywordPage(1); })}
+        sort={keywordSort}
+        onSortChange={(key, direction) => {
+          preserveScroll(() => {
+            setKeywordSort({ sortKey: key, sortDirection: direction });
+            setKeywordPage(1);
+          });
+        }}
       />
     );
   };
