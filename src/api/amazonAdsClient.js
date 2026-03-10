@@ -929,6 +929,180 @@ class AmazonAdsClient {
   }
 
   /**
+   * Get Sponsored Brands ad groups using v4 API
+   * Endpoint: POST /sb/v4/adGroups/list (query params, null body)
+   * Reference: https://advertising.amazon.com/API/docs/en-us/sponsored-brands/3-0/openapi/prod
+   */
+  async getSponsoredBrandsAdGroups(filters = {}) {
+    logger.info('Fetching Sponsored Brands ad groups (v4 API) via POST /sb/v4/adGroups/list...');
+
+    const params = this._buildSBAdGroupsQueryParams(filters);
+    const customHeaders = {
+      'Accept': 'application/vnd.sbadgroup.v4+json'
+    };
+
+    const response = await this.makeRequest('POST', '/sb/v4/adGroups/list', null, params, 3, 100, customHeaders);
+
+    if (!response) return { adGroups: [], nextToken: null };
+
+    let adGroups = [];
+    let nextToken = null;
+
+    if (Array.isArray(response)) {
+      adGroups = response;
+    } else if (typeof response === 'object') {
+      adGroups = response.adGroups || response.adGroupList || [];
+      nextToken = response.nextToken || null;
+    }
+
+    return { adGroups, nextToken };
+  }
+
+  _buildSBAdGroupsQueryParams(filters = {}) {
+    const params = {};
+
+    if (filters.stateFilter) {
+      if (typeof filters.stateFilter === 'object' && Array.isArray(filters.stateFilter.include)) {
+        params.stateFilter = filters.stateFilter.include.map(s => String(s).trim().toLowerCase()).join(',');
+      } else if (Array.isArray(filters.stateFilter)) {
+        params.stateFilter = filters.stateFilter.map(s => String(s).trim().toLowerCase()).join(',');
+      } else {
+        params.stateFilter = String(filters.stateFilter).trim().toLowerCase();
+      }
+    } else {
+      params.stateFilter = 'enabled,paused,archived';
+    }
+
+    if (filters.campaignIdFilter) {
+      params.campaignIdFilter = Array.isArray(filters.campaignIdFilter)
+        ? filters.campaignIdFilter.join(',')
+        : String(filters.campaignIdFilter);
+    }
+
+    if (Number.isInteger(filters.maxResults)) {
+      params.maxResults = Math.min(Math.max(filters.maxResults, 10), 100);
+    } else {
+      params.maxResults = 100;
+    }
+
+    if (filters.nextToken) {
+      params.nextToken = filters.nextToken;
+    }
+
+    return params;
+  }
+
+  /**
+   * Page through all SB ad groups using nextToken pagination.
+   */
+  async getAllSponsoredBrandsAdGroups(filters = {}) {
+    const allAdGroups = [];
+    let nextToken = null;
+    const maxPages = 100;
+    let page = 0;
+
+    do {
+      page++;
+      if (page > maxPages) {
+        logger.warn(`SB ad groups: reached max page limit (${maxPages}), stopping`);
+        break;
+      }
+
+      const pageFilters = { ...filters, maxResults: 100 };
+      if (nextToken) {
+        pageFilters.nextToken = nextToken;
+      }
+
+      const result = await this.getSponsoredBrandsAdGroups(pageFilters);
+      const adGroups = result.adGroups || [];
+      nextToken = result.nextToken || null;
+
+      allAdGroups.push(...adGroups);
+
+      if (allAdGroups.length > 0 && allAdGroups.length % 500 === 0) {
+        logger.info(`Fetched ${allAdGroups.length} Sponsored Brands ad groups so far...`);
+      }
+    } while (nextToken);
+
+    return allAdGroups;
+  }
+
+  /**
+   * Get Sponsored Display ad groups using v3 API
+   * Endpoint: GET /sd/adGroups
+   * Reference: https://advertising.amazon.com/API/docs/en-us/sponsored-display/3-0/openapi
+   */
+  async getSponsoredDisplayAdGroups(filters = {}) {
+    logger.info('Fetching Sponsored Display ad groups (v3 API)...');
+
+    const params = {};
+
+    if (filters.stateFilter) {
+      if (typeof filters.stateFilter === 'object' && Array.isArray(filters.stateFilter.include)) {
+        params.stateFilter = filters.stateFilter.include.map(s => String(s).trim().toLowerCase()).join(',');
+      } else if (Array.isArray(filters.stateFilter)) {
+        params.stateFilter = filters.stateFilter.map(s => String(s).trim().toLowerCase()).join(',');
+      } else {
+        params.stateFilter = String(filters.stateFilter).trim().toLowerCase();
+      }
+    } else {
+      params.stateFilter = 'enabled,paused,archived';
+    }
+
+    if (filters.campaignIdFilter) {
+      params.campaignIdFilter = Array.isArray(filters.campaignIdFilter) ? filters.campaignIdFilter.join(',') : String(filters.campaignIdFilter);
+    }
+
+    if (Number.isInteger(filters.startIndex)) {
+      params.startIndex = filters.startIndex;
+    }
+    if (Number.isInteger(filters.count)) {
+      params.count = filters.count;
+    }
+
+    const customHeaders = {
+      'Accept': 'application/vnd.sdadgroup.v3+json, application/json'
+    };
+
+    const result = await this.makeRequest('GET', '/sd/adGroups', null, params, 3, 100, customHeaders);
+    if (Array.isArray(result)) return result;
+    if (result && Array.isArray(result.adGroups)) return result.adGroups;
+    if (result && Array.isArray(result.adGroupList)) return result.adGroupList;
+    return [];
+  }
+
+  /**
+   * Page through all Sponsored Display ad groups using startIndex/count pagination.
+   */
+  async getAllSponsoredDisplayAdGroups(filters = {}) {
+    const allAdGroups = [];
+    let startIndex = Number.isInteger(filters.startIndex) ? filters.startIndex : 0;
+    const count = Number.isInteger(filters.count) ? filters.count : 100;
+    let hasMore = true;
+
+    while (hasMore) {
+      const pageFilters = { ...filters, startIndex, count };
+      const adGroups = await this.getSponsoredDisplayAdGroups(pageFilters);
+
+      if (!Array.isArray(adGroups)) break;
+
+      allAdGroups.push(...adGroups);
+
+      if (adGroups.length < count) {
+        hasMore = false;
+      } else {
+        startIndex += count;
+      }
+
+      if (allAdGroups.length > 0 && allAdGroups.length % 500 === 0) {
+        logger.info(`Fetched ${allAdGroups.length} Sponsored Display ad groups so far...`);
+      }
+    }
+
+    return allAdGroups;
+  }
+
+  /**
    * Request a performance report using v3 API
    * According to: https://advertising.amazon.com/API/docs/en-us/guides/reporting/v3/report-types/overview
    */
@@ -1667,6 +1841,136 @@ class AmazonAdsClient {
     logger.info(`Fetching Sponsored Display campaign performance data for ${reportDate}...`);
 
     const reportId = await this.requestSDCampaignReport(reportDate);
+    const reportData = await this.waitAndDownloadReport(reportId);
+
+    return reportData;
+  }
+
+  /**
+   * Default metrics for Sponsored Brands ad group report (v3 Reporting API).
+   * sbCampaigns with groupBy: ['adGroup'] returns adGroupId, campaignId, and SB metric names.
+   */
+  getDefaultMetricsForSBAdGroups() {
+    return [
+      'date',
+      'campaignId',
+      'campaignName',
+      'adGroupId',
+      'adGroupName',
+      'impressions',
+      'clicks',
+      'cost',
+      'purchases',
+      'purchasesClicks',
+      'sales',
+      'salesClicks'
+    ];
+  }
+
+  /**
+   * Request a Sponsored Brands ad group performance report (v3 Reporting API).
+   * adProduct SPONSORED_BRANDS, reportTypeId sbCampaigns, groupBy: ['adGroup'].
+   */
+  async requestSBAdGroupReport(reportDate) {
+    logger.info(`Requesting Sponsored Brands ad group performance report for ${reportDate}...`);
+
+    const formattedDate = this.formatDateForAPI(reportDate);
+    const columns = this.getDefaultMetricsForSBAdGroups();
+
+    const reportConfig = {
+      name: `sbAdGroups_${reportDate}`,
+      startDate: formattedDate,
+      endDate: formattedDate,
+      configuration: {
+        adProduct: 'SPONSORED_BRANDS',
+        groupBy: ['adGroup'],
+        columns,
+        reportTypeId: 'sbCampaigns',
+        timeUnit: 'DAILY',
+        format: 'GZIP_JSON'
+      }
+    };
+
+    const headers = {
+      'Content-Type': 'application/vnd.createasyncreportrequest.v3+json',
+      'Accept': 'application/vnd.createasyncreportresponse.v3+json'
+    };
+
+    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig, null, 3, 1000, headers);
+    return response.reportId;
+  }
+
+  /**
+   * Get Sponsored Brands ad group performance data for a report date.
+   */
+  async getSBAdGroupPerformanceData(reportDate) {
+    logger.info(`Fetching Sponsored Brands ad group performance data for ${reportDate}...`);
+
+    const reportId = await this.requestSBAdGroupReport(reportDate);
+    const reportData = await this.waitAndDownloadReport(reportId);
+
+    return reportData;
+  }
+
+  /**
+   * Default metrics for Sponsored Display ad group report (v3 Reporting API).
+   * sdCampaigns with groupBy: ['adGroup'] returns adGroupId, campaignId, and SD metric names.
+   */
+  getDefaultMetricsForSDAdGroups() {
+    return [
+      'date',
+      'campaignId',
+      'campaignName',
+      'adGroupId',
+      'adGroupName',
+      'impressions',
+      'clicks',
+      'cost',
+      'purchasesClicks',
+      'salesClicks'
+    ];
+  }
+
+  /**
+   * Request a Sponsored Display ad group performance report (v3 Reporting API).
+   * adProduct SPONSORED_DISPLAY, reportTypeId sdCampaigns, groupBy: ['adGroup'].
+   */
+  async requestSDAdGroupReport(reportDate) {
+    logger.info(`Requesting Sponsored Display ad group performance report for ${reportDate}...`);
+
+    const formattedDate = this.formatDateForAPI(reportDate);
+    const columns = this.getDefaultMetricsForSDAdGroups();
+
+    const reportConfig = {
+      name: `sdAdGroups_${reportDate}`,
+      startDate: formattedDate,
+      endDate: formattedDate,
+      configuration: {
+        adProduct: 'SPONSORED_DISPLAY',
+        groupBy: ['adGroup'],
+        columns,
+        reportTypeId: 'sdCampaigns',
+        timeUnit: 'DAILY',
+        format: 'GZIP_JSON'
+      }
+    };
+
+    const headers = {
+      'Content-Type': 'application/vnd.createasyncreportrequest.v3+json',
+      'Accept': 'application/vnd.createasyncreportresponse.v3+json'
+    };
+
+    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig, null, 3, 1000, headers);
+    return response.reportId;
+  }
+
+  /**
+   * Get Sponsored Display ad group performance data for a report date.
+   */
+  async getSDAdGroupPerformanceData(reportDate) {
+    logger.info(`Fetching Sponsored Display ad group performance data for ${reportDate}...`);
+
+    const reportId = await this.requestSDAdGroupReport(reportDate);
     const reportData = await this.waitAndDownloadReport(reportId);
 
     return reportData;
