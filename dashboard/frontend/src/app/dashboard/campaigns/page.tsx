@@ -282,7 +282,7 @@ export default function HierarchicalCampaignManager() {
   const adsPagination = adsResponse ? { page: adsResponse.page, pageSize: adsResponse.page_size, total: adsResponse.total, totalPages: adsResponse.total_pages } : undefined;
 
   const { data: keywordsResponse, isLoading: keywordsLoading } = useQuery({
-    queryKey: ['keywords', selectedAdGroup?.id, days, keywordPage, keywordPageSize, keywordSort?.sortKey ?? null, keywordSort?.sortDirection ?? null],
+    queryKey: ['keywords', selectedAdGroup?.id, days, keywordPage, keywordPageSize, keywordSort?.sortKey ?? null, keywordSort?.sortDirection ?? null, statusFilter],
     queryFn: () => fetchKeywords({
       ad_group_id: selectedAdGroup?.id,
       days,
@@ -290,6 +290,7 @@ export default function HierarchicalCampaignManager() {
       page_size: keywordPageSize,
       sort_by: keywordSort?.sortKey,
       sort_order: keywordSort?.sortDirection,
+      state: statusFilter !== 'all' ? statusFilter : undefined,
     }),
     enabled: activeTab === 'keywords' && selectedAdGroup !== null,
   });
@@ -375,6 +376,11 @@ export default function HierarchicalCampaignManager() {
       return k.state?.toLowerCase() === statusFilter.toLowerCase();
     }) || [];
   }, [keywords, statusFilter]);
+
+  // Reset keywords to page 1 when status filter changes so pagination matches filtered results
+  useEffect(() => {
+    setKeywordPage(1);
+  }, [statusFilter]);
 
   const actionMutation = useMutation({
     mutationFn: ({
